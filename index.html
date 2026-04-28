@@ -114,6 +114,7 @@
             overflow: hidden;
             /* 隱藏預設游標，使用自訂準星 */
             cursor: none; 
+            touch-action: none; /* 新增這行，確保手機點擊不會被判定為滑動 */
         }
 
         #webgl-container {
@@ -340,7 +341,7 @@
         <div id="crosshair"></div>
 
         <div class="ui-layer">
-            <div class="instruction-toast" id="toast-msg">移動滑鼠瞄準星石，點擊發射雷射！</div>
+            <div class="instruction-toast" id="toast-msg">滑動/方向鍵移動視角，點擊星石發射雷射！</div>
         </div>
 
         <div class="flash" id="flash"></div>
@@ -428,16 +429,34 @@
         let hoveredAsteroid = null;
         let audioEngine = null; // 新增音效引擎變數
         
+        // 攝影機控制變數
+        let camTheta = 0, camPhi = Math.PI / 2;
+        let targetCamTheta = 0, targetCamPhi = Math.PI / 2;
+        const camRadius = 30;
+        let isPointerDown = false, isDragging = false;
+        let downPointerPos = { x: 0, y: 0 };
+        let lastPointerPos = { x: 0, y: 0 };
+
         const RAYCASTER = new THREE.Raycaster();
         const MOUSE = new THREE.Vector2();
 
         // === 初始化 ===
         function init() {
             const startOverlay = document.getElementById('start-overlay');
-            startOverlay.addEventListener('click', () => {
-                audioEngine = new CinematicAudioEngine();
-                audioEngine.startBGM();
-                startOverlay.style.display = 'none';
+            // 改用 pointerdown 讓網頁與手機版都能瞬間反應
+            startOverlay.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                startOverlay.style.display = 'none'; // 先隱藏畫面確保無延遲
+                
+                try {
+                    if (!audioEngine) {
+                        audioEngine = new CinematicAudioEngine();
+                        audioEngine.startBGM();
+                    }
+                } catch (err) {
+                    console.error("Audio init error:", err);
+                }
             });
 
             originalHeroesText = heroListArea.value;
@@ -460,11 +479,76 @@
                 resetGame();
             });
 
-            // 滑鼠移動與點擊
+            // 統一使用 pointer events 完美支援手機與網頁
             const mainArea = document.getElementById('main-area');
-            mainArea.addEventListener('mousemove', onMouseMove);
-            mainArea.addEventListener('touchmove', onTouchMove, {passive: false});
-            mainArea.addEventListener('click', shoot);
+            
+            mainArea.addEventListener('pointerdown', (e) => {
+                // 如果點到其他 UI 介面就忽略
+                if (e.target.closest('#start-overlay') || e.target.closest('#result-modal') || e.target.closest('aside')) {
+                    return;
+                }
+                
+                isPointerDown = true;
+                isDragging = false;
+                downPointerPos.x = e.clientX;
+                downPointerPos.y = e.clientY;
+                lastPointerPos.x = e.clientX;
+                lastPointerPos.y = e.clientY;
+            });
+
+            mainArea.addEventListener('pointermove', (e) => {
+                // 電腦版滑鼠移動更新準星
+                if (e.pointerType === 'mouse') {
+                    updateMousePos(e.clientX, e.clientY);
+                }
+                
+                // 拖曳視角邏輯
+                if (isPointerDown) {
+                    const dx = e.clientX - lastPointerPos.x;
+                    const dy = e.clientY - lastPointerPos.y;
+                    
+                    // 判斷是否為滑動 (移動超過 5px 視為滑動而非點擊)
+                    if (!isDragging && (Math.abs(e.clientX - downPointerPos.x) > 5 || Math.abs(e.clientY - downPointerPos.y) > 5)) {
+                        isDragging = true;
+                    }
+                    
+                    if (isDragging) {
+                        targetCamTheta -= dx * 0.005; // 左右旋轉
+                        targetCamPhi -= dy * 0.005;   // 上下旋轉
+                        // 限制上下視角，避免翻轉顛倒
+                        targetCamPhi = Math.max(0.1, Math.min(Math.PI - 0.1, targetCamPhi));
+                    }
+                    
+                    lastPointerPos.x = e.clientX;
+                    lastPointerPos.y = e.clientY;
+                }
+            });
+            
+            mainArea.addEventListener('pointerup', (e) => {
+                if (!isPointerDown) return;
+                isPointerDown = false;
+                
+                if (!isDragging) {
+                    // 如果沒有滑動，視為點擊/發射 (Tap to Shoot)
+                    updateMousePos(e.clientX, e.clientY);
+                    RAYCASTER.setFromCamera(MOUSE, camera);
+                    const intersects = RAYCASTER.intersectObjects(asteroids);
+                    hoveredAsteroid = intersects.length > 0 ? intersects[0].object : null;
+                    
+                    shoot();
+                }
+                isDragging = false;
+            });
+
+            // 加入鍵盤方向鍵 / WASD 監聽
+            window.addEventListener('keydown', (e) => {
+                const speed = 0.1;
+                if (e.key === 'ArrowLeft' || e.key === 'a') targetCamTheta -= speed;
+                if (e.key === 'ArrowRight' || e.key === 'd') targetCamTheta += speed;
+                if (e.key === 'ArrowUp' || e.key === 'w') targetCamPhi -= speed;
+                if (e.key === 'ArrowDown' || e.key === 's') targetCamPhi += speed;
+                targetCamPhi = Math.max(0.1, Math.min(Math.PI - 0.1, targetCamPhi));
+            });
             
             initThree();
         }
@@ -565,14 +649,6 @@
         }
 
         // === 互動邏輯 ===
-        function onMouseMove(e) {
-            updateMousePos(e.clientX, e.clientY);
-        }
-        function onTouchMove(e) {
-            e.preventDefault();
-            updateMousePos(e.touches[0].clientX, e.touches[0].clientY);
-        }
-
         function updateMousePos(clientX, clientY) {
             if (currentState !== STATE.PLAYING) return;
             
@@ -599,9 +675,11 @@
                 document.body.style.cursor = 'default';
                 crosshair.style.display = 'none';
 
-                // 畫雷射光
+                // 畫雷射光 (從目前攝影機的下方一點點發射)
+                const laserOrigin = camera.position.clone();
+                laserOrigin.y -= 2;
                 laserLine.geometry.setFromPoints([
-                    new THREE.Vector3(0, -10, 20), // 螢幕下方
+                    laserOrigin,
                     hoveredAsteroid.position
                 ]);
                 laserLine.visible = true;
@@ -685,6 +763,14 @@
             const delta = clock.getDelta();
             const time = clock.getElapsedTime();
 
+            // 攝影機平滑移動 (Lerp)
+            camTheta += (targetCamTheta - camTheta) * 0.1;
+            camPhi += (targetCamPhi - camPhi) * 0.1;
+            camera.position.x = camRadius * Math.sin(camPhi) * Math.sin(camTheta);
+            camera.position.y = camRadius * Math.cos(camPhi);
+            camera.position.z = camRadius * Math.sin(camPhi) * Math.cos(camTheta);
+            camera.lookAt(0, 0, 0);
+
             // 星空緩慢旋轉
             particles.rotation.y += 0.001;
 
@@ -718,8 +804,12 @@
             }
 
             if (currentState === STATE.RESULT && summonedCrystal) {
-                // 水晶飛向螢幕中心並旋轉
-                summonedCrystal.position.lerp(new THREE.Vector3(0, 0, 20), 0.05);
+                // 水晶飛向攝影機前方 10 單位處並旋轉
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                const targetPos = camera.position.clone().add(dir.multiplyScalar(10));
+                
+                summonedCrystal.position.lerp(targetPos, 0.05);
                 summonedCrystal.rotation.y += 0.05;
                 summonedCrystal.rotation.x += 0.02;
             }
@@ -760,7 +850,7 @@
             currentState = STATE.PLAYING;
             crosshair.style.display = 'block';
             document.body.style.cursor = 'none'; // 恢復隱藏游標
-            toastMsg.textContent = "移動滑鼠瞄準星石，點擊發射雷射！";
+            toastMsg.textContent = "滑動/方向鍵移動視角，點擊星石發射雷射！";
         }
 
         function onWindowResize() {

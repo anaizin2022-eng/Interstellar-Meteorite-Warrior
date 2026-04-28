@@ -326,6 +326,11 @@
             <span>召喚後將勇者移出名冊</span>
         </label>
 
+        <label class="checkbox-row">
+            <input type="checkbox" id="toggle-audio">
+            <span>開啟星際沉浸音效</span>
+        </label>
+
         <button id="update-btn" class="btn-reset">↺ 重置空間矩陣</button>
 
         <div class="drawn-section">
@@ -345,13 +350,6 @@
         </div>
 
         <div class="flash" id="flash"></div>
-
-        <div id="start-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(2, 6, 23, 0.95); z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--accent); cursor: pointer; backdrop-filter: blur(5px);">
-            <div style="font-size: 64px; margin-bottom: 20px; animation: float 2s infinite ease-in-out;">🌌</div>
-            <h1 style="text-shadow: 0 0 15px rgba(45, 212, 191, 0.8); margin: 0 0 10px 0;">點擊啟動星際矩陣與音效</h1>
-            <p style="color: var(--text-muted); font-size: 14px;">(開啟電影級沉浸體驗)</p>
-            <style>@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-15px); } }</style>
-        </div>
 
         <!-- 結果 Modal -->
         <div id="result-modal">
@@ -405,6 +403,7 @@
         const heroListArea = document.getElementById('hero-list');
         const updateBtn = document.getElementById('update-btn');
         const removeCheckbox = document.getElementById('remove-drawn');
+        const toggleAudioBtn = document.getElementById('toggle-audio');
         const drawnListUI = document.getElementById('drawn-list');
         const container = document.getElementById('webgl-container');
         const crosshair = document.getElementById('crosshair');
@@ -442,20 +441,19 @@
 
         // === 初始化 ===
         function init() {
-            const startOverlay = document.getElementById('start-overlay');
-            // 改用 pointerdown 讓網頁與手機版都能瞬間反應
-            startOverlay.addEventListener('pointerdown', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                startOverlay.style.display = 'none'; // 先隱藏畫面確保無延遲
-                
-                try {
+            // 音效開關邏輯
+            toggleAudioBtn.addEventListener('change', async (e) => {
+                if (e.target.checked) {
                     if (!audioEngine) {
                         audioEngine = new CinematicAudioEngine();
-                        audioEngine.startBGM();
+                        await audioEngine.startBGM();
+                    } else if (audioEngine.ctx.state === 'suspended') {
+                        await audioEngine.ctx.resume();
                     }
-                } catch (err) {
-                    console.error("Audio init error:", err);
+                } else {
+                    if (audioEngine && audioEngine.ctx.state === 'running') {
+                        await audioEngine.ctx.suspend();
+                    }
                 }
             });
 
@@ -484,7 +482,7 @@
             
             mainArea.addEventListener('pointerdown', (e) => {
                 // 如果點到其他 UI 介面就忽略
-                if (e.target.closest('#start-overlay') || e.target.closest('#result-modal') || e.target.closest('aside')) {
+                if (e.target.closest('#result-modal') || e.target.closest('aside')) {
                     return;
                 }
                 
@@ -670,7 +668,7 @@
 
             if (hoveredAsteroid) {
                 // 擊中！
-                if (audioEngine) audioEngine.playLaser(); // 播放雷射音效
+                if (audioEngine && toggleAudioBtn.checked) audioEngine.playLaser(); // 播放雷射音效
                 currentState = STATE.SHOOTING;
                 document.body.style.cursor = 'default';
                 crosshair.style.display = 'none';
@@ -695,7 +693,7 @@
 
         function explodeAsteroid(asteroid) {
             // 畫面閃光
-            if (audioEngine) audioEngine.playExplosion(); // 播放史詩爆炸音效
+            if (audioEngine && toggleAudioBtn.checked) audioEngine.playExplosion(); // 播放史詩爆炸音效
             flash.classList.add('active');
             setTimeout(() => flash.classList.remove('active'), 300);
 
